@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
+
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "forge-std/console.sol";
@@ -16,13 +17,13 @@ contract TokenManager is ReentrancyGuard {
     error ZeroSpentAmount();
     error InsufficientSpentAmount();
     error InvalidsPartsQuantity();
+    error InvalidsSpentQuantity();
     error TooEarly();
 
     modifier validReceiversAndParts(
         address[] calldata receivers,
         uint256[] calldata parts
     ) {
-        console.log("dfgdgfdg");
         if (receivers.length != parts.length) {
             revert InvalidLengthOfWalletsOrParts();
         }
@@ -33,11 +34,11 @@ contract TokenManager is ReentrancyGuard {
     }
 
     modifier validTotalParts(uint256[] calldata proportions) {
-        console.log(address(msg.sender));
         uint256 totalParts = 0;
         for (uint256 i = 0; i < proportions.length; i++) {
             totalParts += proportions[i];
         }
+
         if (totalParts == 0) {
             revert InvalidsPartsQuantity();
         }
@@ -45,9 +46,6 @@ contract TokenManager is ReentrancyGuard {
     }
 
     modifier validSpentAmount(uint256 totalAmount) {
-        console.log("dfgdgfdg");
-        console.log(totalAmount);
-        console.log(totalAmount == 0);
         // require(totalAmount > 0, "Sent amount must be greater than zero");
         if (totalAmount == 0) {
             revert ZeroSpentAmount();
@@ -70,20 +68,13 @@ contract TokenManager is ReentrancyGuard {
         uint256[] calldata proportions,
         uint256 totalAmount
     )
-        external
-        payable
-        nonReentrant
-        validReceiversAndParts(receivers, proportions)
-        validTotalParts(proportions)
-        validSpentAmount(totalAmount)
+    external
+    payable
+    nonReentrant
+    validReceiversAndParts(receivers, proportions)
+    validTotalParts(proportions)
+    validSpentAmount(totalAmount)
     {
-        console.log(msg.sender);
-        console.log(msg.sender.balance);
-        console.log(msg.value);
-        if (msg.value < totalAmount) {
-           revert InsufficientSpentAmount();
-       }
-
         uint256 totalParts = 0;
         for (uint256 i = 0; i < proportions.length; i++) {
             totalParts += proportions[i];
@@ -91,10 +82,10 @@ contract TokenManager is ReentrancyGuard {
 
         for (uint256 i = 0; i < receivers.length; i++) {
             uint256 recipientAmount = (totalAmount *
-                proportions[i] *
+            proportions[i] *
                 CALC_PRECISION) / (totalParts * CALC_PRECISION);
 
-            (bool success, ) = receivers[i].call{value: recipientAmount}("");
+            (bool success,) = receivers[i].call{value: recipientAmount}("");
             require(
                 success,
                 "Native token transfer failed"
@@ -114,16 +105,18 @@ contract TokenManager is ReentrancyGuard {
         uint256[] calldata proportions,
         uint256 totalAmount
     )
-        external
-        nonReentrant
-        validReceiversAndParts(receivers, proportions)
-        validTotalParts(proportions)
-        validSpentAmount(totalAmount)
+    external
+    nonReentrant
+    validReceiversAndParts(receivers, proportions)
+    validTotalParts(proportions)
+    validSpentAmount(totalAmount)
     {
         IERC20 token = IERC20(tokenAddress);
 
         uint256 senderBalance = token.balanceOf(msg.sender);
-        require(senderBalance >= totalAmount, "Insufficient token balance");
+        if (senderBalance < totalAmount) {
+            revert InsufficientSpentAmount();
+        }
 
         uint256 totalParts = 0;
         for (uint256 i = 0; i < proportions.length; i++) {
@@ -132,7 +125,7 @@ contract TokenManager is ReentrancyGuard {
 
         for (uint256 i = 0; i < receivers.length; i++) {
             uint256 recipientAmount = (totalAmount *
-                proportions[i] *
+            proportions[i] *
                 CALC_PRECISION) / (totalParts * CALC_PRECISION);
             require(
                 token.transferFrom(msg.sender, receivers[i], recipientAmount),
@@ -145,13 +138,12 @@ contract TokenManager is ReentrancyGuard {
     //            COLLECTION            //
     // ******************************** //
 
-
     /// @notice Collects ERC20 tokens from different wallets to one sender
     /// @param percentages - scaled by "PERCENT_PRECISION". Should be passed scaled!
     /// @dev Percentages are increased by "PERCENT_PRECISION" (10^6) to provide ability of usage floating numbers
     ///      e.g. 50.147256% - should be sent as 50147256
     /// @dev Calculation uses additional scale multiplier "CALC_PRECISION" for best precision
-    function collectTokens(
+    function collectERC20Tokens(
         address tokenAddress,
         address[] calldata wallets,
         uint256[] calldata percentages
@@ -160,15 +152,16 @@ contract TokenManager is ReentrancyGuard {
 
         for (uint256 i = 0; i < wallets.length; i++) {
             uint256 walletBalance = token.balanceOf(wallets[i]);
+
+            // Skip if no balance
+            if (walletBalance == 0) {
+                continue;
+            }
+
             // Calculate the amount to collect based on the percentage
             uint256 collectAmount = (walletBalance *
-                percentages[i] *
+            percentages[i] *
                 CALC_PRECISION) / (100 * PERCENT_PRECISION * CALC_PRECISION);
-
-            require(
-                walletBalance > collectAmount,
-                "Insufficient token balance"
-            );
 
             // Ensure the sender has approved this contract to transfer the required tokens
             require(
